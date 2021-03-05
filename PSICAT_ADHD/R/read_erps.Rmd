@@ -1,0 +1,78 @@
+---
+title: "Read hdf5 ERP files"
+output: html_notebook
+---
+
+```{r setup}
+library(data.table)
+library(tidyverse)
+library(Rtools)
+```
+
+
+Target & primer ERPs. Resulting dataframe will have time locked to target onset.  
+Target ERPs have baseline of -250...0, primer ERPs -250...-150   
+Vertex, parietal, and occipital ROIs, 5-6 channels each    
+```{r}
+adhd_folder <- file.path('~/ANALYSIS/ADHD/export/HDF5_EXPORT')
+ctrl_folder <- file.path('~/ANALYSIS/CONTROL/export/HDF5_EXPORT')
+
+#get list of files in folder
+#primer and target separately because of different lengths
+adhd_h5_target <- list.files(adhd_folder, full.names = T, pattern = 'target')
+ctrl_h5_target <- list.files(ctrl_folder, full.names = T, pattern = 'target')
+adhd_h5_primer <- list.files(adhd_folder, full.names = T, pattern = 'primer')
+ctrl_h5_primer <- list.files(ctrl_folder, full.names = T, pattern = 'primer')
+
+#get contents of files
+#set element (erp or erpavg)
+element <- '/erpavg'
+
+read_eeg <- function(filelist) {
+eeg <- loadfl.h5(filelist, element)
+
+erpLst <- simplify2array(eeg) #to array
+names(dimnames(erpLst)) <- c('channel','time', 'ds') #name dimensions
+pd <- reshape2::melt(erpLst) %>% #to long data.frame, makes strings into factors
+  mutate(ds = as.character(ds)) %>%
+  mutate(channel = as.character(channel)) %>% 
+  filter(channel %in% c('A1', 'A2', 'B1', 'C1', 'D1', 'D15', # vertex, for P3a
+                        'A19', 'A4', 'A5', 'A20', 'A32', # parietal, for P3b
+                        'A23', 'A15', 'A22', 'A24', 'A28') #occipital, for N1
+         ) %>%
+  mutate(roi = case_when(channel %in% c('A1', 'A2', 'B1', 'C1', 'D1', 'D15') ~ 'vertex',
+                         channel %in% c('A19', 'A4', 'A5', 'A20', 'A32') ~ 'parietal',
+                         channel %in% c('A23', 'A15', 'A22', 'A24', 'A28') ~ 'occipital')) %>%
+  group_by(ds) %>%
+  mutate(ds_base = basename(ds)) %>% 
+  mutate(group = ifelse(grepl('ADHD',ds), 'adhd', 'ctrl')) %>%
+  mutate(erpid = strsplit(ds_base,'_')[[1]][4]) %>% 
+  mutate(sbj = strsplit(ds_base,'_')[[1]][1]) %>%
+  mutate(shape = ifelse(grepl('nonShape', erpid), 'nonshape', 'shape'),
+         congruency = ifelse(grepl('Congruent', erpid), 'con', 'incon'),
+         pritar = ifelse(grepl('primer', erpid), 'primer', 'target')) %>% 
+  mutate(time_locked = time,
+         time = ifelse(pritar == 'primer', time_locked - 150, time_locked)) %>% #shift primer time by 150 ms
+  group_by(channel, time, erpid, group, sbj, shape, congruency, pritar, roi) %>%
+  summarise(value = mean(value)) %>%
+  ungroup 
+pd
+}
+
+```
+
+```{r}
+
+adhd_target <- read_eeg(adhd_h5_target)
+adhd_primer <- read_eeg(adhd_h5_primer)
+ctrl_target <- read_eeg(ctrl_h5_target)
+ctrl_primer <- read_eeg(ctrl_h5_primer)
+
+df_ctrl <- rbind(ctrl_target, ctrl_primer)
+df_adhd <- rbind(adhd_target, adhd_primer)
+
+df <- rbind(adhd_target, adhd_primer,
+      ctrl_target, ctrl_primer) %>%
+  filter(time <= 500)
+```
+
