@@ -1,0 +1,180 @@
+---
+title: "PSICAT MWE pipeline"
+output: html_notebook
+---
+```{r setup}
+library(tidyverse)
+
+source("~/GitHub/ctap/ctap_R/ctap_rtools/R/MWE.R")
+```
+
+
+
+## Read PSICAT hdf5 files
+
+--
+
+## Find MWE curves
+
+```{r}
+df <- readRDS('~/GitHub/PSICAT-ADHD/PSICAT_ADHD/data/psicat_neural.rds')
+```
+
+Should find a way to pick the appropriate number of grouping vars (pre/post, group, condition, ...)  
+(Also when transforming data to wide should take care of unique identifiers)  
+
+All df's should have common columns channel, time, erpid, sbj, sbj_mean  
+
+
+```{r}
+df <- df %>%
+  rename(sbj_mean = value) %>%
+  filter(channel == 'A1', roi == 'vertex') %>%
+  select(group, sbj, erpid, time, sbj_mean)
+```
+
+```{r}
+df
+```
+
+
+```{r}
+find_erp_curves <- function(dataset, grp, erp, alpha = 0.05) {
+  
+  a = alpha
+
+  dat <- get(dataset) %>%
+    filter(group == grp, erpid == erp) %>%
+    select(sbj, time, sbj_mean) %>%
+    pivot_wider(names_from = time, values_from = sbj_mean) %>%
+    dplyr::select(-sbj)
+  
+  idx <- which(apply(dat,2,function(x) all(!is.na(x))))  
+  
+  curvematrix <- as.matrix(dat[,idx])
+  
+  curve <- tryCatch(findcurves(curvematrix, alpha = a), error=function(e) data.frame(grp, erp))
+  
+  curve <- curve %>%
+    rownames_to_column('time') %>%
+    mutate(time = as.numeric(time))
+  
+  curve %>% # add grouping columns
+    mutate(group = grp,
+           erpid = erp)
+}
+
+curves <- find_erp_curves(dataset = "df", grp = 'adhd', erp = 'target-hit-Congruent-nonShape')
+
+```
+
+
+
+```{r}
+curves
+```
+```{r}
+# curves %>%
+#  ggplot(aes(time, group = interaction(group, erpid), colour = erpid)) +
+#     geom_vline(aes(xintercept=0), alpha=.8) +
+#     geom_hline(aes(yintercept=0), alpha=.8) +
+#     geom_line(aes(y = mean0)) +
+#     geom_ribbon(aes(ymin = lo, ymax = up, fill = erpid), alpha=0.2, colour = NA) +
+#     geom_ribbon(aes(ymin = lo0, ymax = up0), alpha=0, linetype = 'dotted', show.legend = F)  + 
+#     facet_grid(~group) +
+#     scale_y_reverse() +
+#     scale_x_continuous(breaks = c(-50, 0, 200, 400), guide = guide_axis(angle = 20)) +
+#     labs(y = "Amplitude (\U003BCV)",
+#          x = "Time (ms)") + 
+#     theme_minimal() + 
+#     theme(
+#       text = element_text(size=12),
+#       axis.title = element_text(size=11),
+#       axis.text = element_text(size=9),
+#       legend.text = element_text(size=11),
+#       strip.text = element_text(size=11),
+#       legend.title = element_blank(), 
+#       panel.border = element_blank(),
+#       panel.grid.major = element_blank(),
+#       panel.grid.minor = element_blank(),
+#       legend.position='right', 
+#       legend.justification='top',
+#       legend.direction='vertical') 
+```
+
+
+Get multiple curves at once
+
+```{r}
+vars <- expand_grid(dataset = 'df',
+                    var1 = c('adhd', 'ctrl'), 
+                    var2 = c('target-hit-Congruent-nonShape', 'target-hit-Congruent-shape'))
+
+curves_shapes <- mapply(find_erp_curves, vars$dataset, vars$var1, vars$var2, SIMPLIFY = F, USE.NAMES = F)
+
+```
+
+
+```{r}
+
+# TODO ylims in y_continuous, reverse after that
+
+plot_ci_one <- function(curve_list, curve_colors = c('#0072B2', '#D55E00'), grp = NA, erp = NA, ylims = NA, ymirror = FALSE, ybreakstep = 5) {
+  
+  alldata <- bind_rows(curve_list)
+  
+  if (!is.na(grp)){
+    alldata <- filter(alldata, grp)
+  }
+  if (!is.na(erp)){
+    alldata <- filter(alldata, erp)
+  }
+  
+  if (is.na(ylims)){
+    if (ymirror){
+      ylims = max(abs(min(alldata$lo)), max(alldata$up))
+      ylims = c(-ylims, ylims)
+    }else{
+      ylims = c(max(alldata$up), min(alldata$lo)) # note: order needs to be c(upper, lower) if y scale is reversed
+    }
+  }
+#  ybreaks = seq(ylims[1] + abs(ylims[1])%%ybreakstep, ylims[2], ybreakstep)
+  
+  p <- alldata %>%
+    ggplot(aes(time, group = interaction(group, erpid), colour = erpid)) +
+    geom_vline(aes(xintercept=0), alpha=.8) +
+    geom_hline(aes(yintercept=0), alpha=.8) +
+    geom_line(aes(y = mean0)) +
+    geom_ribbon(aes(ymin = lo, ymax = up, fill = erpid), alpha=0.2, colour = NA) +
+    geom_ribbon(aes(ymin = lo0, ymax = up0), alpha=0, linetype = 'dotted', show.legend = F)  + 
+    facet_grid(~group) +
+    scale_y_reverse(limits = ylims #, breaks = ybreaks
+                    ) +
+    scale_x_continuous(breaks = c(-50, 0, 200, 400), guide = guide_axis(angle = 20)) +
+    labs(y = "Amplitude (\U003BCV)",
+         x = "Time (ms)") + 
+    theme_minimal() + 
+    theme(
+      text = element_text(size=12),
+      axis.title = element_text(size=11),
+      axis.text = element_text(size=9),
+      legend.text = element_text(size=11),
+      strip.text = element_text(size=11),
+      legend.title = element_blank(), 
+      panel.border = element_blank(),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      legend.position='right', 
+      legend.justification='top',
+      legend.direction='vertical') +
+    scale_color_manual(values = curve_colors) +
+    scale_fill_manual(values = curve_colors)  
+  
+  p
+}
+```
+
+```{r}
+plot_ci_one(curves_shapes, ybreakstep = 2)
+```
+

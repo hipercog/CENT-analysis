@@ -1,0 +1,450 @@
+---
+title: "Liza_neural"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(tidyverse)
+library(readr)
+library(afex)
+library(broom)
+library(lme4)
+library(lmerTest)
+library(multcomp)
+```
+
+```{r}
+psicat_neural <- readRDS("psicat_neural.rds")
+psicat_neural
+
+source('./MWE.R')
+
+adhd.a1.con.sci <- psicat_neural %>% 
+  filter(channel == "A1", pritar == "target", erpid == "target-hit-Congruent-nonShape", group == "adhd") %>%
+  dplyr::select(time, sbj, value) %>%
+  pivot_wider(names_from = time)
+
+ctrl.a1.con.sci <- psicat_neural %>% 
+  filter(channel == "A1", pritar == "target", erpid == "target-hit-Congruent-nonShape", group == "ctrl") %>%
+  dplyr::select(time, sbj, value) %>%
+  pivot_wider(names_from = time)
+
+adhd.a1.con.sci.mwe <- findcurves(adhd.a1.con.sci[,-1])
+ctrl.a1.con.sci.mwe <- findcurves(ctrl.a1.con.sci[,-1])
+
+adhd.a1.con.sci.mwe <- mutate(adhd.a1.con.sci.mwe, cond = "adhd", time = as.numeric(rownames(adhd.a1.con.sci.mwe)))
+ctrl.a1.con.sci.mwe <- mutate(ctrl.a1.con.sci.mwe, cond = "ctrl", time = as.numeric(rownames(ctrl.a1.con.sci.mwe)))
+
+mwe <- rbind(adhd.a1.con.sci.mwe, ctrl.a1.con.sci.mwe)
+
+mwe.plt <- ggplot(aes(time, mean0, group = cond), data = mwe) +
+  geom_ribbon(aes(ymin = lo, ymax = up, fill = cond), alpha = 0.2, linetype = 0) +
+  # geom_ribbon(aes(ymin = lo0, ymax = up0, fill = "blue"), alpha = 0.2, linetype = 0) +
+  geom_line()
+mwe.plt
+
+
+```
+
+
+#ERP Curves + CIs
+
+##H3P3a
+
+```{r}
+psicat_neural %>% filter(pritar == "primer") %>% filter(roi == "vertex") %>% ggplot(aes(x = time, y = value, colour=congruency)) +
+  stat_summary(fun = "mean", geom = "line",size=0.2) +
+  facet_wrap("group") + 
+  geom_vline(xintercept = 0, linetype = "dashed", size=0.2) + 
+  geom_hline(yintercept = 0, linetype = "dashed", size=0.2)
+
+difference_H3P3a <- psicat_neural %>% filter(pritar == "primer") %>% filter(roi == "vertex") %>% dplyr::select(-erpid) %>% spread(congruency, value) %>% mutate(difference = incon - con)
+
+head(difference_H3P3a)
+
+difference_H3P3a  %>% 
+  ggplot(aes(x = time, y = difference, fill = group)) +
+  stat_summary(fun.data = mean_cl_normal, geom = "ribbon", alpha = 0.2)+
+  stat_summary(fun.y = mean, geom = "line") +
+  facet_grid(group~.)
+
+difference_H3P3a  %>%
+  ggplot(aes(x = time, y = difference, fill = group)) +
+  stat_summary(fun.y = mean, geom = "line", aes(group = sbj), alpha=0.1)  +
+  stat_summary(fun.data = mean_cl_normal, geom = "ribbon", alpha = 0.2)+
+  stat_summary(fun.y = mean, geom = "line") +
+  facet_grid(group~.)
+
+```
+
+```{r}
+amp_P3a <- psicat_neural %>% filter(pritar == "primer") %>% filter(roi == "vertex") %>% filter(time >= 250 & time <= 280) 
+mean_amp_P3a <- psicat_neural %>% filter(pritar == "primer") %>% filter(roi == "vertex") %>% filter(time >= 250 & time <= 280) %>%
+  group_by(sbj,group,congruency) %>%
+  summarise(value = mean(value))
+
+mean_amp_P3a
+
+ggplot(mean_amp_P3a, aes(x = congruency, y = value, colour = group)) +
+  geom_point() + 
+  geom_line(aes(group = sbj), alpha = 0.5) 
+
+ggplot(mean_amp_P3a, aes(x = congruency, y = value)) +
+  stat_summary(geom = "bar") +
+  geom_point() + 
+  stat_summary(fun.data = mean_cl_normal, geom = "pointrange") + 
+  facet_wrap(~group)
+```
+
+```{r}
+lmer_H3P3a <- lmer(value ~ group*congruency + (1|congruency:sbj) + (1|sbj), data=amp_P3a)
+summary(lmer_H3P3a)
+
+post_hocs <- ls_means(lmer_H3P3a, pairwise=TRUE, adjust = "holm")
+post_hocs
+
+#summary(glht(lmer_H3P3a, lsm(pairwise~group*congruency)), test=adjusted(type="holm"), pbkrtest.limit = 13440)
+```
+
+
+```{r}
+group_ttest <- t.test(value ~ group, data = amp_P3a, paired = FALSE)
+group_ttest
+```
+
+```{r}
+pr_vertex_adhd <- psicat_neural %>% filter(pritar == "primer") %>% filter(roi == "vertex") %>% filter(group == "adhd")
+pr_vertex_ctrl <- psicat_neural %>% filter(pritar == "primer") %>% filter(roi == "vertex") %>% filter(group == "ctrl")
+
+```  
+
+```{r}
+
+stat_out_P3a_adhd <- pr_vertex_adhd %>%
+  nest(-time) %>%
+  mutate(stats = (map(data, ~broom::tidy(t.test(value~congruency, paired = TRUE, data = .x))))) %>%
+  dplyr::select(-data) %>%
+  unnest()
+
+stat_out_P3a_adhd
+
+stat_out_P3a_ctrl <- pr_vertex_ctrl %>%
+  nest(-time) %>%
+  mutate(stats = (map(data, ~broom::tidy(t.test(value~congruency, paired = TRUE, data = .x))))) %>%
+  dplyr::select(-data) %>%
+  unnest()
+
+stat_out_P3a_ctrl
+
+```
+
+
+
+```{r}
+stat_out_P3a_adhd$corr.p <- p.adjust(stat_out_P3a_adhd$p.value, method = "holm")
+stat_out_P3a_adhd$p.sig <- 0 + (stat_out_P3a_adhd$p.value < .05)
+stat_out_P3a_adhd$corr.p.sig <- 0 + (stat_out_P3a_adhd$corr.p < .05)
+stat_out_P3a_adhd$p.sig[stat_out_P3a_adhd$p.sig == 0] <- NA
+stat_out_P3a_adhd$corr.p.sig[stat_out_P3a_adhd$corr.p.sig == 0] <- NA
+stat_out_P3a_adhd
+
+ggplot()+
+  geom_line(data = stat_out_P3a_adhd, aes(x = time, y = estimate)) +
+  geom_ribbon(data = stat_out_P3a_adhd, aes(ymax = conf.high, ymin = conf.low, x = time, y = estimate), alpha = 0.3) +
+  geom_line(data = stat_out_P3a_adhd, aes(x = time, y = corr.p.sig-3), size = 2)+
+  labs(x = "Time (ms)", y = expression(paste("Amplitude (", mu, "V)")), colour = "") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed")
+
+stat_out_P3a_ctrl$corr.p <- p.adjust(stat_out_P3a_ctrl$p.value, method = "holm")
+stat_out_P3a_ctrl$p.sig <- 0 + (stat_out_P3a_ctrl$p.value < .05)
+stat_out_P3a_ctrl$corr.p.sig <- 0 + (stat_out_P3a_ctrl$corr.p < .05)
+stat_out_P3a_ctrl$p.sig[stat_out_P3a_ctrl$p.sig == 0] <- NA
+stat_out_P3a_ctrl$corr.p.sig[stat_out_P3a_ctrl$corr.p.sig == 0] <- NA
+stat_out_P3a_ctrl
+
+ggplot()+
+  geom_line(data = stat_out_P3a_ctrl, aes(x = time, y = estimate)) +
+  geom_ribbon(data = stat_out_P3a_ctrl, aes(ymax = conf.high, ymin = conf.low, x = time, y = estimate), alpha = 0.3) +
+  geom_line(data = stat_out_P3a_ctrl, aes(x = time, y = corr.p.sig-3), size = 2)+
+  labs(x = "Time (ms)", y = expression(paste("Amplitude (", mu, "V)")), colour = "") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed")
+```
+
+
+##H3P3b
+
+```{r}
+psicat_neural %>% filter(pritar == "primer") %>% filter(roi == "parietal") %>% ggplot(aes(x = time, y = value, colour=congruency)) +
+  stat_summary(fun = "mean", geom = "line",size=0.2) +
+  facet_wrap("group") + 
+  geom_vline(xintercept = 0, linetype = "dashed", size=0.2) + 
+  geom_hline(yintercept = 0, linetype = "dashed", size=0.2)
+
+difference_H3P3b <- psicat_neural %>%  filter(pritar == "primer") %>% filter(roi == "parietal") %>% dplyr::select(-erpid) %>% spread(congruency, value) %>% mutate(difference = incon - con)
+
+head(difference_H3P3b)
+
+difference_H3P3b  %>% 
+  ggplot(aes(x = time, y = difference, fill = group)) +
+  stat_summary(fun.data = mean_cl_normal, geom = "ribbon", alpha = 0.2)+
+  stat_summary(fun.y = mean, geom = "line") +
+  facet_grid(group~.)
+
+difference_H3P3b  %>% 
+  ggplot(aes(x = time, y = difference, fill = group)) +
+  stat_summary(fun.y = mean, geom = "line", aes(group = sbj), alpha=0.1)  +
+  stat_summary(fun.data = mean_cl_normal, geom = "ribbon", alpha = 0.2)+
+  stat_summary(fun.y = mean, geom = "line") +
+  facet_grid(group~.)
+```
+
+##H4pN1
+
+```{r}
+#Select only rows baseline corrected for primer analysis and in occipital area (as N1 is the strongest there). Build the plot time - value by shape and by group with mean value across channels in occipital area and subjects.
+psicat_neural %>% filter(pritar == "primer") %>% filter(roi == "occipital") %>% ggplot(aes(x = time, y = value, colour=shape)) +
+  stat_summary(fun = "mean", geom = "line",size=0.2) +
+  facet_wrap("group") + 
+  geom_vline(xintercept = 0, linetype = "dashed", size=0.2) + 
+  geom_hline(yintercept = 0, linetype = "dashed", size=0.2)
+
+#Making the data wider, so "shape" and "non-shape" will be two different columns. Create a new variable "difference" by subtraction "shape" from "nonshape".
+difference_H4pN1 <- psicat_neural %>%  filter(pritar == "primer") %>% filter(roi == "occipital") %>% dplyr::select(-erpid) %>% spread(shape, value) %>% mutate(difference = nonshape - shape)
+
+head(difference_H4pN1)
+
+#Build the graph for differences across time. Add confidence intervals. Mean across subjects and channels and congruency (because N1 is to early to have effect of congruency).
+difference_H4pN1  %>% 
+  ggplot(aes(x = time, y = difference, fill = group)) +
+  stat_summary(fun.data = mean_cl_normal, geom = "ribbon", alpha = 0.2)+
+  stat_summary(fun.y = mean, geom = "line") +
+  facet_grid(group~.)
+
+#Same but individual difference curves are added.
+difference_H4pN1  %>%  
+  ggplot(aes(x = time, y = difference, fill = group)) +
+  stat_summary(fun.y = mean, geom = "line", aes(group = sbj), alpha=0.1)  +
+  stat_summary(fun.data = mean_cl_normal, geom = "ribbon", alpha = 0.2)+
+  stat_summary(fun.y = mean, geom = "line") +
+  facet_grid(group~.)
+```
+
+```{r}
+#Take the window for N1 (150-200ms) and calculate the mean amplitude (across channels and congruency) by group, subject and shape.
+amp_pN1 <- psicat_neural %>% filter(pritar == "primer") %>% filter(roi == "occipital") %>% filter(time >= 150 & time <= 200) 
+mean_amp_pN1 <- psicat_neural %>% filter(pritar == "primer") %>% filter(roi == "occipital") %>% filter(time >= 150 & time <= 200) %>%
+  group_by(sbj,group,shape) %>%
+  summarise(value = mean(value))
+
+mean_amp_pN1
+
+#Build the graphs
+ggplot(mean_amp_pN1, aes(x = shape, y = value, colour = group)) +
+  geom_point() + 
+  geom_line(aes(group = sbj), alpha = 0.5) 
+
+ggplot(mean_amp_pN1, aes(x = shape, y = value)) +
+  stat_summary(geom = "bar") +
+  geom_point() + 
+  stat_summary(fun.data = mean_cl_normal, geom = "pointrange") + 
+  facet_wrap(~group)
+```
+
+```{r}
+lmer_pN1 <- lmer(value ~ group*shape + (1|shape:sbj) + (1|sbj), data=amp_P3a)
+summary(lmer_pN1)
+
+post_hocs <- ls_means(lmer_pN1, pairwise=TRUE, adjust = "holm")
+post_hocs
+
+#This line doesn't work. Do we need that?
+#summary(glht(lmer_H3P3a, lsm(pairwise~group*congruency)), test=adjusted(type="holm"), pbkrtest.limit = 13440)
+
+#I guess this should be calculated separately for Shape and NonShape conditions.
+group_ttest <- t.test(value ~ shape, data = amp_pN1, paired = FALSE)
+group_ttest
+```
+
+
+```{r}
+pr_occipital_adhd <- psicat_neural %>% filter(pritar == "primer") %>% filter(roi == "occipital") %>% filter(group == "adhd")
+pr_occipital_ctrl <- psicat_neural %>% filter(pritar == "primer") %>% filter(roi == "occipital") %>% filter(group == "ctrl")
+```
+
+```{r}
+#Nesting the data and adding an extra column containing the output of the t.test() function applied to each element of the *data* list within the time_nest frame. Separately for CTRL and ADHD groups.
+stat_out_pN1_adhd <- pr_occipital_adhd %>%
+  nest(-time) %>%
+  mutate(stats = (map(data, ~broom::tidy(t.test(value~shape, paired = TRUE, data = .x))))) %>%
+  dplyr::select(-data) %>%
+  unnest()
+
+stat_out_pN1_adhd
+
+stat_out_pN1_ctrl <- pr_occipital_ctrl %>%
+  nest(-time) %>%
+  mutate(stats = (map(data, ~broom::tidy(t.test(value~shape, paired = TRUE, data = .x))))) %>%
+  dplyr::select(-data) %>%
+  unnest()
+
+stat_out_pN1_ctrl
+```
+
+```{r}
+#Correct p-value for multiple comparisons and put the significance level at 95%.
+stat_out_pN1_adhd$corr.p <- p.adjust(stat_out_pN1_adhd$p.value, method = "holm")
+stat_out_pN1_adhd$p.sig <- 0 + (stat_out_pN1_adhd$p.value < .05)
+stat_out_pN1_adhd$corr.p.sig <- 0 + (stat_out_pN1_adhd$corr.p < .05)
+stat_out_pN1_adhd$p.sig[stat_out_pN1_adhd$p.sig == 0] <- NA
+stat_out_pN1_adhd$corr.p.sig[stat_out_pN1_adhd$corr.p.sig == 0] <- NA
+stat_out_pN1_adhd
+
+#Plotting the data with confidence intervals and indicators of which timepoints are significant.
+ggplot()+
+  geom_line(data = stat_out_pN1_adhd, aes(x = time, y = estimate)) +
+  geom_ribbon(data = stat_out_pN1_adhd, aes(ymax = conf.high, ymin = conf.low, x = time, y = estimate), alpha = 0.3) +
+  geom_line(data = stat_out_pN1_adhd, aes(x = time, y = corr.p.sig-3), size = 2)+
+  labs(x = "Time (ms)", y = expression(paste("Amplitude (", mu, "V)")), colour = "") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed")
+
+#Same for CTRL group
+stat_out_pN1_ctrl$corr.p <- p.adjust(stat_out_pN1_ctrl$p.value, method = "holm")
+stat_out_pN1_ctrl$p.sig <- 0 + (stat_out_pN1_ctrl$p.value < .05)
+stat_out_pN1_ctrl$corr.p.sig <- 0 + (stat_out_pN1_ctrl$corr.p < .05)
+stat_out_pN1_ctrl$p.sig[stat_out_pN1_ctrl$p.sig == 0] <- NA
+stat_out_pN1_ctrl$corr.p.sig[stat_out_pN1_ctrl$corr.p.sig == 0] <- NA
+stat_out_pN1_ctrl
+
+ggplot()+
+  geom_line(data = stat_out_pN1_ctrl, aes(x = time, y = estimate)) +
+  geom_ribbon(data = stat_out_pN1_ctrl, aes(ymax = conf.high, ymin = conf.low, x = time, y = estimate), alpha = 0.3) +
+  geom_line(data = stat_out_pN1_ctrl, aes(x = time, y = corr.p.sig-3), size = 2)+
+  labs(x = "Time (ms)", y = expression(paste("Amplitude (", mu, "V)")), colour = "") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed")
+```
+To DO:
+Calculate and compare ES for Ctrl and ADHD
+
+```{r}
+#Calculate and compare ES for Ctrl and ADHD
+
+```
+
+
+##H4tN1 (congr)
+
+```{r}
+psicat_neural %>% filter(pritar == "target") %>% filter(congruency == "con") %>% filter(roi == "occipital") %>% ggplot(aes(x = time, y = value, colour=shape)) +
+  stat_summary(fun = "mean", geom = "line",size=0.2) +
+  facet_wrap("group") + 
+  geom_vline(xintercept = 0, linetype = "dashed", size=0.2) + 
+  geom_hline(yintercept = 0, linetype = "dashed", size=0.2)
+
+difference_H4tN1_con <- psicat_neural %>%  filter(pritar == "target") %>% filter(roi == "occipital") %>% filter(congruency == "con") %>% dplyr::select(-erpid) %>% spread(shape, value) %>% mutate(difference = nonshape - shape)
+
+head(difference_H4tN1_con)
+
+difference_H4tN1_con  %>%  
+  ggplot(aes(x = time, y = difference, fill = group)) +
+  stat_summary(fun.data = mean_cl_normal, geom = "ribbon", alpha = 0.2)+
+  stat_summary(fun.y = mean, geom = "line") +
+  facet_grid(group~.)
+
+difference_H4tN1_con  %>% 
+  ggplot(aes(x = time, y = difference, fill = group)) +
+  stat_summary(fun.y = mean, geom = "line", aes(group = sbj), alpha=0.1)  +
+  stat_summary(fun.data = mean_cl_normal, geom = "ribbon", alpha = 0.2)+
+  stat_summary(fun.y = mean, geom = "line") +
+  facet_grid(group~.)
+```
+
+##H4tN1 (incong)
+
+```{r}
+psicat_neural %>% filter(pritar == "target") %>% filter(congruency == "incon") %>% filter(roi == "occipital") %>% ggplot(aes(x = time, y = value, colour=shape)) +
+  stat_summary(fun = "mean", geom = "line",size=0.2) +
+  facet_wrap("group") + 
+  geom_vline(xintercept = 0, linetype = "dashed", size=0.2) + 
+  geom_hline(yintercept = 0, linetype = "dashed", size=0.2)
+
+difference_H4tN1_incon <- psicat_neural %>%  filter(pritar == "target") %>% filter(roi == "occipital") %>% filter(congruency == "incon") %>% dplyr::select(-erpid) %>% spread(shape, value) %>% mutate(difference = nonshape - shape)
+
+head(difference_H4tN1_incon)
+
+difference_H4tN1_incon  %>%  
+  ggplot(aes(x = time, y = difference, fill = group)) +
+  stat_summary(fun.data = mean_cl_normal, geom = "ribbon", alpha = 0.2)+
+  stat_summary(fun.y = mean, geom = "line") +
+  facet_grid(group~.)
+
+difference_H4tN1_incon  %>% 
+  ggplot(aes(x = time, y = difference, fill = group)) +
+  stat_summary(fun.y = mean, geom = "line", aes(group = sbj), alpha=0.1)  +
+  stat_summary(fun.data = mean_cl_normal, geom = "ribbon", alpha = 0.2)+
+  stat_summary(fun.y = mean, geom = "line") +
+  facet_grid(group~.)
+```
+
+##H4tP3a (cong)
+
+```{r}
+psicat_neural %>% filter(pritar == "target") %>% filter(congruency == "con") %>% filter(roi == "vertex") %>% ggplot(aes(x = time, y = value, colour=shape)) +
+  stat_summary(fun = "mean", geom = "line",size=0.2) +
+  facet_wrap("group") + 
+  geom_vline(xintercept = 0, linetype = "dashed", size=0.2) + 
+  geom_hline(yintercept = 0, linetype = "dashed", size=0.2)
+
+difference_H4tP3a_con <- psicat_neural %>%  filter(pritar == "target") %>% filter(roi == "vertex") %>% filter(congruency == "con") %>% dplyr::select(-erpid) %>% spread(shape, value) %>% mutate(difference = nonshape - shape)
+
+head(difference_H4tP3a_con)
+
+difference_H4tP3a_con  %>%  
+  ggplot(aes(x = time, y = difference, fill = group)) +
+  stat_summary(fun.data = mean_cl_normal, geom = "ribbon", alpha = 0.2)+
+  stat_summary(fun.y = mean, geom = "line") +
+  facet_grid(group~.)
+
+difference_H4tP3a_con  %>% 
+  ggplot(aes(x = time, y = difference, fill = group)) +
+  stat_summary(fun.y = mean, geom = "line", aes(group = sbj), alpha=0.1)  +
+  stat_summary(fun.data = mean_cl_normal, geom = "ribbon", alpha = 0.2)+
+  stat_summary(fun.y = mean, geom = "line") +
+  facet_grid(group~.)
+```
+
+##H4tP3a (incong)
+
+```{r}
+psicat_neural %>% filter(pritar == "target") %>% filter(congruency == "incon") %>% filter(roi == "vertex") %>% ggplot(aes(x = time, y = value, colour=shape)) +
+  stat_summary(fun = "mean", geom = "line",size=0.2) +
+  facet_wrap("group") + 
+  geom_vline(xintercept = 0, linetype = "dashed", size=0.2) + 
+  geom_hline(yintercept = 0, linetype = "dashed", size=0.2)
+
+difference_H4tP3a_incon <- psicat_neural %>%  filter(pritar == "target") %>% filter(roi == "vertex") %>% filter(congruency == "incon") %>% dplyr::select(-erpid) %>% spread(shape, value) %>% mutate(difference = nonshape - shape)
+
+head(difference_H4tP3a_incon)
+
+difference_H4tP3a_incon  %>%  
+  ggplot(aes(x = time, y = difference, fill = group)) +
+  stat_summary(fun.data = mean_cl_normal, geom = "ribbon", alpha = 0.2)+
+  stat_summary(fun.y = mean, geom = "line") +
+  facet_grid(group~.)
+
+difference_H4tP3a_incon  %>% 
+  ggplot(aes(x = time, y = difference, fill = group)) +
+  stat_summary(fun.y = mean, geom = "line", aes(group = sbj), alpha=0.1)  +
+  stat_summary(fun.data = mean_cl_normal, geom = "ribbon", alpha = 0.2)+
+  stat_summary(fun.y = mean, geom = "line") +
+  facet_grid(group~.)
+```
+
